@@ -1,0 +1,180 @@
+import os
+import json
+from datetime import datetime
+
+#支持多种大模型 可自行添加/删除
+#格式：{"name": "模型名称", "endpoint": "接入点ID", "base_url": "调用地址", "api_key": "API密钥"}
+MODELS = [
+    {
+        "name": "豆包1.8",
+        "endpoint": "ep-20260327141323-n8tqm",
+        "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+        "api_key": "c54a76e7-d0c9-422c-a94a-c2b29e22dc92"
+	"max_chars": 10000
+    },
+    {
+        "name": "Deepseek-V3.2",
+        "endpoint": "ep-20260327154913-6l6wq",
+        "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+        "api_key": "c54a76e7-d0c9-422c-a94a-c2b29e22dc92"
+	"max_chars": 10000
+    }
+]
+# 全局配置
+CURRENT_MODEL_INDEX = 0  # 默认使用第一个模型
+conversation_history = []
+HISTORY_FILE = "conversation.json"
+RESEVERD_CHARS=100
+#工具函数
+#加载对话历史
+def load_history():
+    global conversation_history
+    if os.path.exists(HISTORY_FILE):
+        try:
+            with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+                conversation_history = json.load(f)
+        except:
+            conversation_history = []
+
+#保存对话历史
+def save_history():
+    with open(HISTORY_FILE, "w", encoding="utf-8") as f:
+        json.dump(conversation_history, f, ensure_ascii=False, indent=2)
+# 字符数截断机制
+def truncate_conversation():
+    """超出字符限制自动删除最早的对话"""
+    model = get_current_model()
+    max_total = model["max_chars"] - RESERVED_CHARS
+
+    # 统计所有对话的总字符数
+    total_chars = 0
+    for ct in conversation_history:
+        total_chars += len(ct["user"]) + len(ct["ai"])
+
+    if total_chars <= max_total:
+        return
+
+    # 超出限制，删除最早的对话
+    print(f"\n对话过长，自动清理最早记录...")
+    while total_chars > max_total and len(conversation_history) > 0:
+        removed = conversation_history.pop(0)
+        total_chars -= len(removed["user"]) + len(removed["ai"])
+    print(f" 清理完成，当前字符数：{total_chars}/{max_total}")
+#获取当前模型信息
+def get_current_model():
+    return MODELS[CURRENT_MODEL_INDEX]
+
+#API连接验证
+def verify_api(model):
+    print(f"\n正在验证模型：{model['name']}")
+    try:
+        from openai import OpenAI
+        client = OpenAI(api_key=model["api_key"], base_url=model["base_url"])
+        client.chat.completions.create(
+            model=model["endpoint"],
+            messages=[{"role": "user", "content": "test"}]
+        )
+        print(f"{model['name']} 验证成功！")
+        return True
+    except Exception as e:
+        print(f"验证失败：{str(e)}")
+        return False
+
+#调用AI接口
+def call_ai(message):
+    model = get_current_model()
+    try:
+        from openai import OpenAI
+        client = OpenAI(api_key=model["api_key"], base_url=model["base_url"])
+        response = client.chat.completions.create(
+            model=model["endpoint"],
+            messages=[{"role": "user", "content": message}]
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        return f"调用失败：{str(e)}"
+
+def show_help():
+    print("""
+ 多模型AI助手命令说明
+/model list  : 查看所有可用模型
+/model 数字  : 切换模型
+/help        : 查看帮助
+/clear       : 清空当前对话
+/reset       : 重置所有对话）
+/exit        : 退出程序
+""")
+
+def list_models():
+    print("\n=== 可用模型列表 ===")
+    for i, model in enumerate(MODELS):
+        current = "当前使用" if i == CURRENT_MODEL_INDEX else ""
+        print(f"{i+1}. {model['name']} {current}")
+    print("===================\n")
+
+#切换模型
+def switch_model(index):
+    global CURRENT_MODEL_INDEX
+    if 0 <= index < len(MODELS):
+        CURRENT_MODEL_INDEX = index
+        model = get_current_model()
+        verify_api(model)
+        print(f"已切换至模型：{model['name']}")
+    else:
+        print("模型编号不存在！")
+
+def main():
+    load_history()
+    print("多模型AI助手启动成功！")
+    #验证默认模型
+    verify_api(get_current_model())
+    show_help()
+
+    while True:
+        user_input = input("user > ").strip()
+        if not user_input:
+            continue
+
+        if user_input == "/exit":
+            save_history()
+            print(" 再见！")
+            break
+
+        elif user_input == "/help":
+            show_help()
+
+        elif user_input == "/clear":
+            global conversation_history
+            conversation_history = []
+            print(" 对话已清空！")
+
+        elif user_input == "/reset":
+            conversation_history = []
+            if os.path.exists(HISTORY_FILE):
+                os.remove(HISTORY_FILE)
+            print(" 已重置所有对话！")
+
+        elif user_input.startswith("/model"):
+            parts = user_input.split()
+            if len(parts) == 2 and parts[1] == "list":
+                list_models()
+            elif len(parts) == 2 and parts[1].isdigit():
+                switch_model(int(parts[1]))
+            else:
+                print(" 命令格式错误！输入 /help 查看帮助")
+
+        else:
+            reply = call_ai(user_input)
+            model = get_current_model()
+            print(f"{model['name']} > {reply}\n")
+            #保存对话
+            conversation_history.append({
+                "time": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                "model": model['name'],
+                "user": user_input,
+                "ai": reply
+            })
+            save_history()
+
+if __name__ == "__main__":
+    main()
